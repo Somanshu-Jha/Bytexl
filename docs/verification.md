@@ -10,7 +10,7 @@ Environment: Windows 11, Node v24.19.0, npm 11.16.0, Chromium 156.0.8078.4 (Play
 | --- | --- | --- |
 | Domain + API + provider unit tests | `npm test` | **35 passed, 0 failed** (1.54 s) |
 | Production build | `npm run build` | **built successfully**; `tsc -b` clean, no type errors |
-| Browser journeys (no provider) | `npm run test:e2e` | **15 passed, 0 failed** (16.1 s) |
+| Browser journeys (no provider) | `npm run test:e2e` | **16 passed, 0 failed** (17.0 s) |
 | Live NVIDIA NIM pipeline | `npm run test:live` | **completed**; TXT 5.1 s, PNG OCR 16.2 s, chat EN + HI cited |
 | Adversarial extraction probes | direct `normalizeExtraction` calls | **10 attacks, 0 leaks** — see §5 |
 | Secret exposure review | greps + live HTTP probes | **no credential in tracked files, bundle, or any HTTP response** |
@@ -53,7 +53,7 @@ The PNG path surfaced its own caveat — vision transcription can misread decima
 
 ## 3. Browser journeys — `npm run test:e2e`
 
-15 checks in `tests/e2e/journeys.spec.ts`, run against the **built** app on a throwaway database with **NVIDIA deliberately unconfigured** (see `tests/e2e/server.mjs`), so the suite is offline-safe and asserts the fallback path.
+16 checks in `tests/e2e/journeys.spec.ts`, run against the **built** app on a throwaway database with **NVIDIA deliberately unconfigured** (see `tests/e2e/server.mjs`), so the suite is offline-safe and asserts the fallback path.
 
 Note on the harness: this machine has `NVIDIA_API_KEY` exported in its shell environment, which leaks into child processes. The e2e server therefore *injects* an explicitly unconfigured NIM client rather than relying on the variable being absent — otherwise `ai.configured` would read `true` and these assertions would quietly exercise the live branch.
 
