@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1500" viewBox="0 0 1200 1500">
+  <rect width="1200" height="1500" fill="#fff"/>
+  <rect x="60" y="60" width="1080" height="70" rx="12" fill="#fdf0dd"/>
+  <text x="90" y="105" font-family="Arial, sans-serif" font-size="26" font-weight="700" fill="#785022">SYNTHETIC DEMO — NOT A REAL PATIENT REPORT</text>
+  <text x="80" y="215" font-family="Arial, sans-serif" font-size="40" font-weight="700" fill="#214b3c">GREENFIELD DIAGNOSTICS</text>
+  <text x="80" y="260" font-family="Arial, sans-serif" font-size="23" fill="#647269">Fictional laboratory · Demonstration document only</text>
+  <path d="M80 295H1120" stroke="#dce4dd" stroke-width="2"/>
+  <g font-family="Arial, sans-serif" font-size="26" fill="#263c32">
+    <text x="80" y="355">Patient: Aarav Sharma</text>
+    <text x="80" y="400">Date of birth: 1992-08-15 | Sex: Male</text>
+    <text x="80" y="445">Report date: 2026-10-10</text>
+  </g>
+  <text x="80" y="530" font-family="Arial, sans-serif" font-size="32" font-weight="700" fill="#214b3c">Preventive health blood panel</text>
+  <rect x="80" y="575" width="1040" height="70" fill="#eff5ef"/>
+  <g font-family="Arial, sans-serif" font-size="25" font-weight="700" fill="#263c32">
+    <text x="105" y="620">TEST</text><text x="550" y="620">RESULT</text><text x="800" y="620">REFERENCE RANGE</text>
+  </g>
+  <g font-family="Arial, sans-serif" font-size="27" fill="#263c32">
+    <text x="105" y="708">HbA1c</text><text x="550" y="708">6.1 %</text><text x="820" y="708">4.0 – 5.6 %</text>
+    <text x="105" y="818">Fasting glucose</text><text x="550" y="818">112 mg/dL</text><text x="820" y="818">70 – 99 mg/dL</text>
+    <text x="105" y="928">Hemoglobin</text><text x="550" y="928">14.2 g/dL</text><text x="820" y="928">13.0 – 17.0 g/dL</text>
+    <text x="105" y="1038">Vitamin D</text><text x="550" y="1038">24 ng/mL</text><text x="820" y="1038">30 – 100 ng/mL</text>
+  </g>
+  <path d="M80 755H1120M80 865H1120M80 975H1120M80 1085H1120" stroke="#dce4dd" stroke-width="2"/>
+  <g font-family="Arial, sans-serif" font-size="25" fill="#58675f">
+    <text x="80" y="1180">Interpret results with clinical history.</text>
+    <text x="80" y="1225">A laboratory result alone does not establish a diagnosis.</text>
+    <text x="80" y="1340">This fictional sample demonstrates document extraction.</text>
+    <text x="80" y="1385">No real patient information. No clinical validation claim.</text>
+  </g>
+</svg>
