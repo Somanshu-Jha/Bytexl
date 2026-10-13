@@ -98,3 +98,23 @@ The three-minute script makes specific promises, so each was exercised rather th
 **Not verified, and not claimed:** clinical accuracy of any model output; handwriting recognition accuracy (no handwriting fixture was used); real ABHA/ABDM interoperability (linking is a mock; FHIR export is R4-style and uncertified); behavior against real patient documents; concurrency beyond two upload jobs; anything about a hosted or multi-user deployment. Vision transcription is explicitly labeled in-app as prone to misreading decimals and table columns.
 
 No accuracy percentage, benchmark, or clinical outcome claim is made anywhere, because none was measured.
+
+## 7. Screenshots
+
+Captured from the running development server (`npm run dev`, port 5173) at 1440×900 @2x, on the **pristine seeded workspace** after `POST /api/demo/reset` — six synthetic records, the October panel pending review, ABHA unlinked. All eleven captured with zero page errors.
+
+| File | Shows |
+| --- | --- |
+| `docs/screenshots/01-overview.png` | Overview: six records, one awaiting review, health snapshot trend |
+| `docs/screenshots/02-record-evidence.png` | Record sheet: HbA1c 6.1 % beside its raw source line and report range |
+| `docs/screenshots/03-records.png` | Record list with filters and review status |
+| `docs/screenshots/04-timeline.png` | Timeline grouped by real document dates |
+| `docs/screenshots/05-medications.png` | Medication history with source prescription links |
+| `docs/screenshots/06-hindi.png` | Hindi interface — numbers and analyte names preserved |
+| `docs/screenshots/07-upload-consent.png` | Upload sheet with the NVIDIA consent statement and a selected file |
+| `docs/screenshots/08-copilot.png` | Grounded answer citing the saved record, labeled for its mode |
+| `docs/screenshots/09-profile.png` | Profile with the labeled mock ABHA control and FHIR export |
+| `docs/screenshots/10-presentation.png` | Browser presentation deck (6 slides, print-ready) |
+| `docs/screenshots/11-tablet-nav.png` | Tablet viewport with the collapsed navigation open |
+
+These are real captures of this build, not mockups. The corpus is synthetic, so nothing in them is real patient data.
