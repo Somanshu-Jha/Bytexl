@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 const RECORD_TYPES = new Set(['lab', 'prescription', 'discharge', 'diagnostic']);
 const MODES = new Set(['live', 'local', 'demo']);
-const INSTRUCTION_TEXT = /ignore\s+(?:all\s+|previous\s+|prior\s+)?(?:instructions|rules)|system\s*prompt|\[INST\]|<\/?(?:script|system)>|reveal\s+(?:the\s+)?(?:secret|api\s*key)/i;
+// Instruction-like text in a document is treated as source content only (never as control metadata).
+// The qualifier group must not consume the following noun, or the canonical phrase
+// "ignore all previous instructions" slips through: "all previous" matches the group and then
+// "instructions" has nothing left to match.
+const INSTRUCTION_TEXT = /ignore\s+(?:(?:all|any|the|these|those)\s+|(?:previous|prior|earlier|above|preceding)\s+)*(?:instructions|rules|prompts?)\b|system\s*prompt|\b\[INST\]|<\/?(?:script|system)>|reveal\s+(?:the\s+)?(?:secret|api\s*key)|disregard\s+(?:(?:all|any|the)\s+|(?:previous|prior|earlier|above)\s+)*(?:instructions|rules)\b/i;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const clean = (value, limit = 500) => typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, limit) : '';
 const comparable = value => clean(value, 100000).normalize('NFKC').replace(/\s+/g, ' ').toLowerCase();
@@ -27,6 +31,52 @@ function validTimestamp(value, fallback) {
 
 function includesEvidence(source, snippet) {
   return Boolean(snippet) && comparable(source).includes(comparable(snippet));
+}
+
+/**
+ * Read the reference range that this result's own snippet prints, if any.
+ *
+ * Returns `[low, high]` for a two-sided range, `null` when the snippet prints no range, and
+ * `[null, null]` when it prints one we cannot use (incomplete or inverted) — which is different
+ * from "no range printed", because a printed-but-unusable range must not be replaced by a
+ * model-supplied one.
+ */
+function printedRange(snippet, name) {
+  const text = comparable(snippet).replace(/[−–—]/g, '-');
+  if (!text) return null;
+  // Anchor after the analyte name when we can find it, so we do not read another row's range.
+  const printedName = comparable(name);
+  const index = text.indexOf(printedName);
+  const window = index >= 0 ? text.slice(index) : text;
+
+  const twoSided = /(-?\d+(?:\.\d*)?)\s*(?:-|to)\s*(-?\d+(?:\.\d*)?)/.exec(window);
+  if (!twoSided) {
+    // A printed bound with no two-sided range ("reference: < 200") is not a usable comparison.
+    return /(?:reference|ref\.?|range|normal)\b/i.test(window) && /\d/.test(window) ? [null, null] : null;
+  }
+
+  // Guard against reading an unrelated pair (times, dates, doses) as a range: the pair must sit
+  // under an explicit range keyword, or inside parentheses that directly follow the analyte name.
+  const before = window.slice(0, twoSided.index);
+  const keyword = /(?:reference(?:\s+range)?|ref\.?|range|normal)\s*[:(]?\s*$/i.test(before);
+  const parenthesisedAfterName = index >= 0 && /^[^(\n]{0,40}\(?[^)]*$/.test(before) && before.includes('(');
+  if (!keyword && !parenthesisedAfterName) return null;
+
+  const low = Number(twoSided[1]);
+  const high = Number(twoSided[2]);
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return [null, null];
+  return low < high ? [low, high] : [null, null];
+}
+
+/** A unit is accepted only when it is the unit printed for THIS result, not merely a substring of it. */
+function matchesPrintedUnit(snippet, unit) {
+  if (!unit) return false;
+  const text = snippet.normalize('NFKC');
+  const escaped = unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // The unit must sit immediately after the result number (optionally across spaces/punctuation)
+  // and be bounded by a non-unit character, so "g/dL" cannot be accepted from inside "mg/dL".
+  const anchored = new RegExp(`(?:\\d|\\s)\\s*${escaped}(?![\\p{L}\\d/^])`, 'iu').test(text);
+  return anchored;
 }
 
 function hasNumber(source, number) {
@@ -58,6 +108,8 @@ function hasResultNumber(source, name, value) {
 export function classifyObservation(observation = {}) {
   const { value, referenceLow: low, referenceHigh: high } = observation;
   if (![value, low, high].every(item => typeof item === 'number' && Number.isFinite(item)) || low > high) return 'unknown';
+  // Equal bounds are a degenerate range, not a comparison: "within 6.1–6.1" would misstate the report.
+  if (low === high) return 'unknown';
   return value < low ? 'low' : value > high ? 'high' : 'normal';
 }
 
@@ -107,17 +159,39 @@ export function normalizeExtraction(raw, metadata = {}) {
       warn(`An unsupported ${label} was left blank for review.`);
       return null;
     };
-    let referenceLow = numeric(item.referenceLow, 'reference limit');
-    let referenceHigh = numeric(item.referenceHigh, 'reference limit');
-    if (referenceLow !== null && referenceHigh !== null && referenceLow > referenceHigh) {
+    const result = numeric(item.value, 'observation value');
+    // The report's OWN printed range is the authority for the range. If the snippet prints one, we
+    // derive the limits from it and disregard the model's claim entirely — otherwise a forged limit
+    // (e.g. the result value itself) could relabel a genuinely high result as "within range".
+    const printed = printedRange(source, name);
+    let referenceLow;
+    let referenceHigh;
+    if (printed) {
+      [referenceLow, referenceHigh] = printed;
+      if (finiteNumber(item.referenceLow) !== referenceLow || finiteNumber(item.referenceHigh) !== referenceHigh) {
+        warn('A model-supplied reference range disagreed with the range printed in the document; the document range was used.');
+      }
+    } else {
+      // No printed range: accept a limit only if it is evidenced in this snippet and is not the result.
+      const limit = (value, label) => {
+        const candidate = finiteNumber(value);
+        if (candidate === null) return null;
+        if (supported && hasNumber(source, candidate) && candidate !== result) return candidate;
+        warn(`An unsupported ${label} was left blank for review.`);
+        return null;
+      };
+      referenceLow = limit(item.referenceLow, 'reference limit');
+      referenceHigh = limit(item.referenceHigh, 'reference limit');
+    }
+    if (referenceLow !== null && referenceHigh !== null && referenceLow >= referenceHigh) {
       referenceLow = null; referenceHigh = null;
-      warn('An inverted reference range was left blank for review.');
+      warn('An inverted or degenerate reference range was left blank for review.');
     }
     const candidateUnit = safeText(item.unit, 40);
-    const unit = supported && includesEvidence(source, candidateUnit) ? candidateUnit : '';
+    const unit = supported && matchesPrintedUnit(source, candidateUnit) ? candidateUnit : '';
     if (candidateUnit && !unit) warn('An unsupported observation unit was left blank for review.');
     const observation = {
-      id: randomUUID(), name, value: numeric(item.value, 'observation value'), unit,
+      id: randomUUID(), name, value: result, unit,
       referenceLow, referenceHigh, sourceText: source, status: 'unknown', explanation: { en: '', hi: '' },
     };
     observation.status = classifyObservation(observation);

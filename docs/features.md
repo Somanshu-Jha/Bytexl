@@ -31,7 +31,7 @@ The landing screen after start-up.
 
 The full list, with a search box and filters.
 
-- **Search** matches titles, providers and medicines. Typing narrows the list live; the header search box on every other screen jumps here and carries the term with it.
+- **Search** matches the record title, the provider and the extracted source text. Because the source text is included, a medicine name written in a prescription is found too — that is how "Cetirizine" or "Vitamin D3" locates the prescription, rather than a separate medicine index. Typing narrows the list live; the header search box on every other screen jumps here and carries the term with it.
 - **Filters** — `Needs review`, `All records`, then one chip per record type: `Lab report`, `Prescription`, `Discharge summary`, `Diagnostic record`.
 - Each row shows type icon, title, provider, date, and review state. Selecting a row opens the record sheet.
 
@@ -47,7 +47,7 @@ Opened from any record row. This is where a document becomes understandable and 
 - **See source evidence** — expands to the raw line lifted from the document, so you can check the extraction against its origin. This is the trust mechanism: the number and its evidence are never separated in the interface.
 - **Correct details** — switches the extracted values, units, reference limits and dates into editable fields. Corrections are saved to the record; the original source text stays available.
 - **I've reviewed the details** — marks the record reviewed and clears it from the pending count. You can reopen it later.
-- **Still have questions? Ask your copilot** — hands this record to the chat as context.
+- **Still have questions? Ask your copilot** — opens the copilot with a question naming this record. The copilot answers from your saved records, so the record is in scope; the interface asks about the record rather than passing a separate record filter.
 - **Delete** — removes the record from the workspace. This is an application-level delete, not certified secure erasure.
 
 ## Uploading a document
@@ -98,7 +98,7 @@ A record-grounded assistant, not a general medical chatbot.
 
 - **Your health profile** — name, date of birth, gender, blood group, and allergies, with a standard button to save. The allergies field is deliberately labelled to record only what is confirmed in your records or by your clinician, and removing an allergy still needs an explicit save.
 - **Mock connection** — the ABHA panel is visibly a mock: an exploration of how a linked profile *could* work. There is no live ABHA or ABDM connection, and the app does not imply one.
-- **Export health records** — downloads `sehat-fhir-bundle.json`, an R4-style FHIR `Bundle` containing `Patient`, `DocumentReference`, `Observation`, `MedicationStatement`, `Condition`, `AllergyIntolerance` and `Provenance` resources, cross-referenced by internal `urn:uuid`. On the seeded workspace it contains 31 entries and every internal reference resolves. It is an unvalidated prototype export, **not** ABDM-certified interoperability.
+- **Export health records** — downloads `sehat-health-records.fhir.json` (the filename the interface sets), an R4-style FHIR `Bundle` containing `Patient`, `DocumentReference`, `Observation`, `MedicationStatement`, `Condition`, `AllergyIntolerance` and `Provenance` resources, cross-referenced by internal `urn:uuid`. On the seeded workspace it contains 31 entries and every internal reference resolves. It is an unvalidated prototype export, **not** ABDM-certified interoperability.
 
 ## Language
 

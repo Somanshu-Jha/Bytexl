@@ -68,8 +68,8 @@ A guided tour of every screen and control — what each one does, what the uploa
 ## Verification
 
 ```powershell
-npm test          # 35 domain, API and provider tests
-npm run test:e2e  # 15 browser journey checks (Playwright, offline-safe)
+npm test          # 48 domain, API, provider and regression tests
+npm run test:e2e  # 16 browser journey checks (Playwright, offline-safe)
 npm run build     # TypeScript project build and Vite production bundle
 ```
 

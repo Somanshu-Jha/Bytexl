@@ -106,13 +106,42 @@ export function localExtract(sourceText) {
   const observations = [];
   const medications = [];
   const number = '[-+]?\\d+(?:\\.\\d+)?';
-  const labLine = new RegExp(`^([\\p{L}][\\p{L}\\d ()/.,%-]{1,65}?)\\s*[:|]?\\s+(${number})\\s*([\\p{L}\\dµμ%/.*^-]+)?(?:\\s*[|,(;]?\\s*(?:reference(?:\\s+range)?|ref\\.?|range|normal)?\\s*[:(]?\\s*(${number})\\s*[-–—]\\s*(${number}))?`, 'iu');
+  const unitPattern = /^(%|g\/dL|mg\/dL|mmol\/L|mIU\/L|uIU\/mL|IU\/L|U\/L|ng\/mL|pg\/mL|fL|pg|g\/L|mm\/hr|cells\/.*|10\^\d+\/.*|x10.*)$/i;
+  const labelPattern = /^(date|patient|age|phone|id|abha|sample|report|provider|page)\b/i;
+  // A name that still carries a "number - number" fragment is a range the greedy name group ran into.
+  const rangeFragment = /\d\s*[-–—]\s*\d/;
+
+  // Two layouts, tried in order:
+  //   "Name: value unit; reference range: low - high"   (result first)
+  //   "Name (low - high unit): value unit"              (range printed first)
+  // The second is common in Indian lab reports, and a naive greedy name group reads the range's
+  // upper bound as the result, discarding the real value. Parsing left-to-right from the field
+  // separator keeps the result anchored to the field that actually holds it.
+  const resultFirst = new RegExp(`^([\\p{L}][\\p{L}\\d ()/.,%'-]{1,65}?)\\s*[:|]?\\s+(${number})\\s*([\\p{L}\\dµμ%/.*^-]+)?(?:\\s*[|,(;]?\\s*(?:reference(?:\\s+range)?|ref\\.?|range|normal)?\\s*[:(]?\\s*(${number})\\s*[-–—]\\s*(${number}))?`, 'iu');
+  const rangeFirst = new RegExp(`^([\\p{L}][\\p{L}\\d ()/.,%'-]{1,65}?)\\s*\\(\\s*(${number})\\s*[-–—]\\s*(${number})\\s*([\\p{L}\\dµμ%/.*^-]*)\\s*\\)\\s*[:|]?\\s*(${number})\\s*([\\p{L}\\dµμ%/.*^-]+)?`, 'iu');
+
   for (const line of sourceText.split(/\r?\n/)) {
-    const match = line.trim().match(labLine);
-    if (!match || /^(date|patient|age|phone|id|abha|sample|report|provider|page)\b/i.test(match[1])) continue;
-    // An explicit unit is required to avoid treating ordinary prose and IDs as test results.
-    if (!match[3] || !/^(%|g\/dL|mg\/dL|mmol\/L|mIU\/L|uIU\/mL|IU\/L|U\/L|ng\/mL|pg\/mL|fL|pg|g\/L|mm\/hr|cells\/.*|10\^\d+\/.*|x10.*)$/i.test(match[3])) continue;
-    observations.push({ name: match[1].trim().replace(/:$/, ''), value: Number(match[2]), unit: match[3], referenceLow: match[4] === undefined ? null : Number(match[4]), referenceHigh: match[5] === undefined ? null : Number(match[5]), sourceText: line.trim() });
+    const text = line.trim();
+    let parsed = null;
+
+    const before = text.match(rangeFirst);
+    if (before && !rangeFragment.test(before[1]) && !labelPattern.test(before[1])) {
+      const unit = before[6] || before[4] || '';
+      if (unitPattern.test(unit)) {
+        parsed = { name: before[1], value: Number(before[5]), unit, referenceLow: Number(before[2]), referenceHigh: Number(before[3]) };
+      }
+    }
+
+    if (!parsed) {
+      const match = text.match(resultFirst);
+      // The name must not have swallowed a range fragment, or the "value" is that range's bound.
+      if (match && !rangeFragment.test(match[1]) && !labelPattern.test(match[1]) && match[3] && unitPattern.test(match[3])) {
+        parsed = { name: match[1], value: Number(match[2]), unit: match[3], referenceLow: match[4] === undefined ? null : Number(match[4]), referenceHigh: match[5] === undefined ? null : Number(match[5]) };
+      }
+    }
+
+    if (!parsed) continue;
+    observations.push({ ...parsed, name: parsed.name.trim().replace(/:$/, '').trim(), sourceText: text });
   }
   const date = sourceText.match(/(?:date|dated|दिनांक)\s*:?\s*(\d{4}-\d{2}-\d{2})/i)?.[1] || null;
   const provider = sourceText.match(/(?:provider|laboratory|clinic)\s*:\s*([^\r\n]+)/i)?.[1]?.trim() || '';

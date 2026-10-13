@@ -266,3 +266,71 @@ test('scanned PDF is rasterized for vision and saved with vision provenance', as
   assert.equal(record.observations[0].value, 6.1);
   assert.equal(record.observations[0].status, 'high');
 });
+
+// --- Regression: the documented dev workflow must not serve the record store or server source.
+// Vite serves files from the project root by default, which previously exposed data/*.sqlite (and
+// its WAL, containing patient data) to any page that could reach the dev server.
+test('dev server configuration denies the record store, server source and env files', async () => {
+  const { loadConfigFromFile } = await import('vite');
+  const { fileURLToPath } = await import('node:url');
+  const configPath = fileURLToPath(new URL('../vite.config.ts', import.meta.url));
+  const loaded = await loadConfigFromFile({ command: 'serve', mode: 'development' }, configPath);
+  const deny = loaded?.config?.server?.fs?.deny ?? [];
+  const joined = deny.join(' ');
+  for (const pattern of ['data', 'sqlite', 'server', 'env', '.superpowers', 'tests']) {
+    assert.ok(joined.includes(pattern), `vite fs.deny must exclude ${pattern}; got: ${JSON.stringify(deny)}`);
+  }
+});
+
+// --- Regression: a request from another local origin may not mutate state by hostname match alone.
+// The check previously compared only the hostname, so http://localhost:<any-port> was treated as
+// same-origin and could rename the patient or wipe records with a simple cross-origin request.
+test('rejects a state-changing request whose Origin is a different local port', async (t) => {
+  const { base, request } = await fixture(t);
+  for (const origin of ['http://localhost:9999', 'http://127.0.0.1:8080', 'http://127.0.0.1:5173.evil.example']) {
+    const renamed = await request('/api/patient', {
+      method: 'PATCH', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ name: 'Cross Origin' }),
+    });
+    assert.equal(renamed.status, 403, `PATCH from ${origin} must be refused`);
+    const reset = await request('/api/demo/reset', { method: 'POST', headers: { origin } });
+    assert.equal(reset.status, 403, `demo reset from ${origin} must be refused`);
+  }
+  const patient = await (await request('/api/bootstrap')).json();
+  assert.notEqual(patient.patient.name, 'Cross Origin');
+});
+
+test('still accepts same-origin state changes and requests with no Origin header', async (t) => {
+  const { base, request } = await fixture(t);
+  const sameOrigin = await request('/api/patient', {
+    method: 'PATCH', headers: { 'content-type': 'application/json', origin: new URL(base).origin }, body: JSON.stringify({ name: 'Same Origin' }),
+  });
+  assert.equal(sameOrigin.status, 200, 'the app itself must still be able to save the profile');
+  // Non-browser clients (the documented curl/Invoke-RestMethod reset) send no Origin and must work.
+  const noOrigin = await request('/api/demo/reset', { method: 'POST' });
+  assert.equal(noOrigin.status, 200);
+});
+
+// --- Regression: the documented dev workflow proxies through Vite, which rewrites Host while
+// forwarding the browser's original Origin. A full-origin check that only accepted the server's own
+// Host therefore rejected the real app; the configured loopback dev origin must be accepted.
+test('accepts the loopback dev-proxy origin that the documented npm run dev workflow uses', async (t) => {
+  const { request } = await fixture(t);
+  for (const origin of ['http://127.0.0.1:5173', 'http://localhost:5173']) {
+    const saved = await request('/api/patient', {
+      method: 'PATCH', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ name: 'Aarav Sharma' }),
+    });
+    assert.equal(saved.status, 200, `${origin} is the dev proxy the app itself uses`);
+  }
+});
+
+// The accepted-origin list must never widen beyond loopback, whatever is configured.
+test('refuses to honour a non-loopback entry in SEHAT_DEV_ORIGINS', async (t) => {
+  const previous = process.env.SEHAT_DEV_ORIGINS;
+  process.env.SEHAT_DEV_ORIGINS = 'http://evil.example,http://127.0.0.1:5173';
+  t.after(() => { if (previous === undefined) delete process.env.SEHAT_DEV_ORIGINS; else process.env.SEHAT_DEV_ORIGINS = previous; });
+  const { request } = await fixture(t);
+  const refused = await request('/api/patient', {
+    method: 'PATCH', headers: { 'content-type': 'application/json', origin: 'http://evil.example' }, body: JSON.stringify({ name: 'Pwned' }),
+  });
+  assert.equal(refused.status, 403);
+});

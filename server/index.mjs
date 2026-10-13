@@ -18,6 +18,18 @@ const isObject = value => value && typeof value === 'object' && !Array.isArray(v
 const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 const localHostname = value => ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(value);
 
+/**
+ * The Vite dev proxy that the documented `npm run dev` workflow uses. It rewrites Host but forwards
+ * the browser's original Origin, so the app's own requests would otherwise look cross-site to the
+ * full-origin check. Both are loopback-only, and this list never widens beyond loopback hosts.
+ * Override with SEHAT_DEV_ORIGINS (comma separated) when running the interface on another port.
+ */
+function defaultDevOrigins() {
+  const configured = String(process.env.SEHAT_DEV_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
+  if (configured.length) return configured.filter(value => { try { return localHostname(new URL(value).hostname); } catch { return false; } });
+  return ['http://127.0.0.1:5173', 'http://localhost:5173'];
+}
+
 function correction(record, body) {
   if (!isObject(body)) throw new DocumentError('Provide an object containing record corrections.');
   const result = structuredClone(record);
@@ -98,7 +110,7 @@ function localAnswer(records, language, unavailable = false) {
   return { answer: intro + text, citations: selected.map(r => ({ recordId: r.id, title: r.title })), mode: 'local', model: 'record-summary-fallback' };
 }
 
-export function createApp({ databasePath = resolve(process.env.DATA_DIR || resolve(root, 'data'), 'sehat.sqlite'), nim = createNimClient(), seed = true } = {}) {
+export function createApp({ databasePath = resolve(process.env.DATA_DIR || resolve(root, 'data'), 'sehat.sqlite'), nim = createNimClient(), seed = true, devOrigins = defaultDevOrigins() } = {}) {
   const app = express();
   app.disable('x-powered-by');
   const store = createStore(databasePath, { patient: demoPatient, records: seed ? demoRecords : [] });
@@ -110,9 +122,22 @@ export function createApp({ databasePath = resolve(process.env.DATA_DIR || resol
     if (req.path.startsWith('/api/')) res.set('Cache-Control', 'no-store');
     if (!localHostname(req.hostname)) return res.status(403).json({ error: 'This local prototype accepts only localhost requests.' });
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin) {
+      // Compare the FULL origin (scheme + host + port), not just the hostname: matching only the
+      // hostname would treat http://localhost:<any-port> — another local dev server, or any page
+      // served from a local port — as same-origin and let it mutate records with a simple request
+      // that needs no preflight. Requests without an Origin header (curl, the documented reset
+      // command) are unaffected, since only browsers send Origin.
+      //
+      // In the documented dev workflow the browser talks to Vite (5173), which proxies to this
+      // server (3001) and rewrites Host while forwarding the original Origin. So the accepted set
+      // is this server's own address plus the dev proxy, which is loopback-only by construction.
+      const own = new Set([`http://${req.headers.host}`, `https://${req.headers.host}`]);
+      const forwarded = String(req.headers['x-forwarded-host'] || '').trim();
+      if (forwarded) { own.add(`http://${forwarded}`); own.add(`https://${forwarded}`); }
+      for (const candidate of devOrigins) own.add(candidate);
       try {
         const origin = new URL(req.headers.origin);
-        if (!localHostname(origin.hostname) || !['http:', 'https:'].includes(origin.protocol)) throw new Error();
+        if (!localHostname(origin.hostname) || !['http:', 'https:'].includes(origin.protocol) || !own.has(origin.origin)) throw new Error();
       } catch { return res.status(403).json({ error: 'Cross-site requests are not allowed.' }); }
     }
     next();
