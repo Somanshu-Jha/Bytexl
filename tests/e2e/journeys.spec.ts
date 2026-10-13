@@ -28,6 +28,15 @@ test.describe('workspace shell', () => {
     await page.goto('/');
     await expect(page.locator('.app-footer')).toContainText(/not a medical professional/i);
   });
+
+  test('uses a singular noun when exactly one record needs review', async ({ page }) => {
+    await page.goto('/');
+    // The seed leaves exactly one record pending, so the overview prompt must
+    // read "1 record is ready…", not "1 records are ready…".
+    const prompt = page.locator('main');
+    await expect(prompt).not.toContainText('1 records are ready');
+    await expect(prompt).toContainText('1 record is ready');
+  });
 });
 
 test.describe('language toggle', () => {
