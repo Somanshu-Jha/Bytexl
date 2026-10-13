@@ -9,7 +9,4 @@ uploads/
 test-results/
 playwright-report/
 .tmp/
-
-# Local agent/editor scratch
-.superpowers/
 tsconfig.tsbuildinfo

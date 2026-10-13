@@ -9,7 +9,8 @@
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:live": "node --env-file-if-exists=.env tests/live-smoke.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "launch": "node scripts/launch.mjs"
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "^5.3.0",

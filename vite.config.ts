@@ -19,7 +19,7 @@ export default defineConfig({
         '**/*.sqlite-shm',
         '**/server/**',
         '**/tests/**',
-        '**/.superpowers/**',
+        '**/.tmp/**',
         '**/.git/**',
       ],
     },

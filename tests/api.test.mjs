@@ -277,7 +277,7 @@ test('dev server configuration denies the record store, server source and env fi
   const loaded = await loadConfigFromFile({ command: 'serve', mode: 'development' }, configPath);
   const deny = loaded?.config?.server?.fs?.deny ?? [];
   const joined = deny.join(' ');
-  for (const pattern of ['data', 'sqlite', 'server', 'env', '.superpowers', 'tests']) {
+  for (const pattern of ['data', 'sqlite', 'server', 'env', '.tmp', 'tests']) {
     assert.ok(joined.includes(pattern), `vite fs.deny must exclude ${pattern}; got: ${JSON.stringify(deny)}`);
   }
 });
