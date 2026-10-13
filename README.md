@@ -63,6 +63,8 @@ The sample contains HbA1c 6.1%, fasting glucose 112 mg/dL, hemoglobin 14.2 g/dL,
 
 Presentation: [six-slide browser deck](public/presentation.html). It works as a local file, includes arrow-key navigation, and prints one slide per page. When the app runs, use `/presentation.html` or the **Behind Sehat** link. Presenter notes: [three-minute demo script](docs/demo-script.md).
 
+A guided tour of every screen and control — what each one does, what the upload consent gate covers, and how the Hindi switch treats clinical values — is in [the feature guide](docs/features.md).
+
 ## Verification
 
 ```powershell
