@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: sehat-health-copilot
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: PORT
+        value: 10000
+      - key: RENDER
+        value: "true"
+      - key: SEHAT_ALLOW_REMOTE
+        value: "true"
+      - key: NVIDIA_API_KEY
+        sync: false

@@ -140,10 +140,12 @@ export function createApp({ databasePath = resolve(process.env.DATA_DIR || resol
   const bootstrap = () => ({ patient: store.getPatient(), records: store.listRecords(), ai: { configured: nim.configured, models: nim.models } });
   let runningJobs = 0;
   let runningChats = 0;
+  const isCloud = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.SEHAT_ALLOW_REMOTE === 'true');
+  if (isCloud) app.set('trust proxy', 1);
   app.use((req, res, next) => {
     res.set({ 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' });
     if (req.path.startsWith('/api/')) res.set('Cache-Control', 'no-store');
-    if (!localHostname(req.hostname)) return res.status(403).json({ error: 'This local prototype accepts only localhost requests.' });
+    if (!isCloud && !localHostname(req.hostname)) return res.status(403).json({ error: 'This local prototype accepts only localhost requests.' });
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin) {
       // Compare the FULL origin (scheme + host + port), not just the hostname: matching only the
       // hostname would treat http://localhost:<any-port> — another local dev server, or any page
@@ -157,10 +159,12 @@ export function createApp({ databasePath = resolve(process.env.DATA_DIR || resol
       const own = new Set([`http://${req.headers.host}`, `https://${req.headers.host}`]);
       const forwarded = String(req.headers['x-forwarded-host'] || '').trim();
       if (forwarded) { own.add(`http://${forwarded}`); own.add(`https://${forwarded}`); }
+      if (process.env.RENDER_EXTERNAL_URL) own.add(process.env.RENDER_EXTERNAL_URL);
       for (const candidate of devOrigins) own.add(candidate);
       try {
         const origin = new URL(req.headers.origin);
-        if (!localHostname(origin.hostname) || !['http:', 'https:'].includes(origin.protocol) || !own.has(origin.origin)) throw new Error();
+        if (!isCloud && !localHostname(origin.hostname)) throw new Error();
+        if (!['http:', 'https:'].includes(origin.protocol) || !own.has(origin.origin)) throw new Error();
       } catch { return res.status(403).json({ error: 'Cross-site requests are not allowed.' }); }
     }
     next();
@@ -288,8 +292,9 @@ export function createApp({ databasePath = resolve(process.env.DATA_DIR || resol
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { app, store } = createApp();
   const port = Number(process.env.PORT) || 3001;
-  const host = process.env.HOST || '127.0.0.1';
-  if (!localHostname(host)) throw new Error('This single-user prototype must bind to a loopback address.');
+  const isCloud = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.SEHAT_ALLOW_REMOTE === 'true');
+  const host = process.env.HOST || (isCloud ? '0.0.0.0' : '127.0.0.1');
+  if (!isCloud && !localHostname(host)) throw new Error('This single-user prototype must bind to a loopback address.');
   const server = app.listen(port, host, () => console.log(`Sehat API is ready at http://${host}:${port}`));
   const shutdown = () => server.close(() => { store.close(); process.exit(0); });
   process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
