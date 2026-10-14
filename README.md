@@ -4,6 +4,22 @@ A personal health record companion in English and Hindi. Upload a report, inspec
 
 Sehat is a local, single-user hackathon prototype. Use synthetic data for demonstrations. It explains recorded information and does not diagnose or prescribe. ABHA linking is a mock interaction. FHIR export is an unvalidated R4-style collection, without ABDM certification or network integration.
 
+## One-click launch
+On Windows, double-click **START_SEHAT.bat**. It checks Node 24, installs missing dependencies, builds the current interface, starts the local service in the background, waits for both the UI and API to answer, and opens **http://127.0.0.1:3001**. The built frontend and API share one server; no separate database installation is needed.
+
+Double-click **STOP_SEHAT.bat** to stop only the instance managed by this launcher. Saved records remain. Reopening the launcher reuses a healthy managed instance. A port occupied by another application produces an error; the launcher never kills that application.
+
+For an updated build after editing code, run **START_SEHAT.bat --restart**. Logs are in **.tmp/launcher/service.log**. Avoid sharing this folder: it includes the local launcher control token.
+
+Cross-platform terminal equivalents:
+
+~~~powershell
+npm run launch
+npm run stop
+~~~
+
+Use **node scripts/launch.mjs --background --no-open** for background startup without opening a browser, or **--status** to inspect readiness. The launcher honors PORT from the environment / .env; development Vite still uses its separately configured proxy.
+
 ## Run locally
 
 Install **Node.js 24 or later** with npm. Node's built-in `node:sqlite` powers persistence. From the project directory:
@@ -50,6 +66,13 @@ npm start
 
 Open [Sehat at localhost:3001](http://127.0.0.1:3001). Express serves the built interface and API from one local address. “Production bundle” describes the build output, not production healthcare readiness.
 
+## Difficult handwriting
+Select **Handwritten prescription or difficult image** in the upload dialog. This opt-in path decodes EXIF orientation, retains fine grayscale detail, and compares two OCR readings: the original image and a contrast-adjusted image. It permits up to two scanned PDF pages and uses extra provider requests. Text files skip OCR.
+
+Disagreements become [unclear] in the extraction text. Both raw readings remain visible in **Source & AI details**. Medicine names, dosages and numerical fields still require source review; matching readings are not a confidence score or proof of accuracy. When readings disagree, text is unclear, or the second pass fails, the user must explicitly acknowledge the review before marking the record reviewed. Corrections invalidate that acknowledgment. Prescription-only records support medicine/dosage/frequency/duration/instruction correction.
+
+No model can guarantee 100% detection of arbitrary doctor handwriting. If the original is unreadable, ask its prescriber or pharmacist. See [free OCR candidates and measured handwriting failures](docs/ocr-research.md). Local PaddleOCR-VL-1.6 and TrOCR-base-handwritten are recommendations to evaluate, not installed or validated components of this prototype.
+
 ## Demonstrate the product
 
 1. Open **Preventive health panel**, the pending October synthetic record. Expand **See source evidence** for HbA1c, then inspect **Source & AI details**.
@@ -68,14 +91,14 @@ A guided tour of every screen and control — what each one does, what the uploa
 ## Verification
 
 ```powershell
-npm test          # 48 domain, API, provider and regression tests
-npm run test:e2e  # 16 browser journey checks (Playwright, offline-safe)
+npm test          # domain, API, OCR, launcher and regression tests
+npm run test:e2e  # browser journey checks (Playwright, offline-safe)
 npm run build     # TypeScript project build and Vite production bundle
 ```
 
-The first `npm run test:e2e` downloads a Chromium build. The suite runs against the built app with NVIDIA deliberately unconfigured, so it verifies the fallback path and stays offline-safe. To exercise the real provider on synthetic samples instead, run `npm run test:live` with a credential configured.
+Install the browser once with `npx playwright install chromium` if it is not already available. The suite runs against the built app with NVIDIA deliberately unconfigured, so it verifies the fallback path and stays offline-safe. To exercise the real provider on synthetic samples instead, run `npm run test:live` with a credential configured.
 
-The Node tests exercise the domain boundary and local API, including missing values, range handling, evidence checks, input validation, persistence, corrections, fallback modes, and FHIR reference integrity. What was actually executed, on what machine, with which results — including the live NIM run, secret-exposure review, and path-traversal probes — is recorded in [the verification record](docs/verification.md). Integration findings and the distinction between smoke tests and clinical accuracy appear in [research notes](docs/research.md). See [architecture](docs/architecture.md) for the data flow and boundaries.
+The Node tests exercise the domain boundary and local API, including missing values, range handling, evidence checks, input validation, persistence, corrections, fallback modes, and FHIR reference integrity. What was actually executed, on what machine, with which results — including the live NIM run, secret-exposure review, and path-traversal probes — is recorded in [the latest verification record](docs/verification-2026-10-14.md). Integration findings and the distinction between smoke tests and clinical accuracy appear in [research notes](docs/research.md). See [architecture](docs/architecture.md) for the data flow and boundaries.
 
 ## Supported inputs and limits
 
@@ -86,7 +109,7 @@ The Node tests exercise the domain boundary and local API, including missing val
 | Scanned `.pdf` | Render pages, then vision OCR. Requires NVIDIA. |
 | `.png`, `.jpg`, `.jpeg`, `.webp` | Decode and resize for vision OCR. Requires NVIDIA. |
 
-Limits: 12 MB per file, eight total PDF pages, four PDF pages requiring OCR, 28,000 extracted source characters, images below 40 megapixels, two concurrent upload jobs, and 250 saved records. Invalid file signatures, damaged PDFs, empty text, and truncated provider responses produce visible errors.
+Handwriting mode permits at most two rendered PDF pages. Standard limits: 12 MB per file, eight total PDF pages, four PDF pages requiring OCR, 28,000 extracted source characters, images below 40 megapixels, two concurrent upload jobs, and 250 saved records. Invalid file signatures, damaged PDFs, empty text, and truncated provider responses produce visible errors.
 
 The TXT parser only handles explicit laboratory rows with recognized units. It does not provide general offline OCR or prescription extraction. A configured upload that fails upstream becomes a failed job; it does not silently substitute demo output. Chat provider failures produce a labeled local summary. Missing or unverifiable numbers remain blank. Source review does not establish clinical verification.
 
@@ -114,4 +137,4 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3001/api/demo/reset
 
 ## Scope
 
-No authentication, encryption at rest, production access controls, live ABHA verification, ABDM conformance validation, clinical certification, or demonstrated handwriting accuracy is included. The safeguards combine prompts, evidence checks, conservative templates, and limited pattern checks. They do not guarantee clinically correct AI output. Secure deployment, expert evaluation, identity/consent integration, and broader document testing remain future work.
+No authentication, encryption at rest, production access controls, live ABHA verification, ABDM conformance validation, clinical certification, or broad clinical handwriting validation is included. The safeguards combine prompts, evidence checks, conservative templates, and limited pattern checks. They do not guarantee clinically correct AI output. Secure deployment, expert evaluation, identity/consent integration, and broader document testing remain future work.

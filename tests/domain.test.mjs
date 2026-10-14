@@ -102,10 +102,135 @@ test('does not remove a comparison qualifier from a reported numeric result', ()
 });
 
 test('accepts real ISO document dates and retains invalid or missing dates as unknown', () => {
-  assert.equal(normalizeExtraction({date:'2024-02-29'},metadata).date,'2024-02-29');
+  assert.equal(normalizeExtraction({date:'2024-02-29'},{...metadata,sourceText:'Report date: 2024-02-29'}).date,'2024-02-29');
   for (const date of [undefined,null,'2026-02-29','2026-02-30','10/11/26','2026-13-01','2026-10-10T00:00:00Z']) {
     assert.equal(normalizeExtraction({date},metadata).date,null);
   }
+});
+
+test('never uses unrelated ages, dates, or another row as a reference pair', () => {
+  for(const sourceText of ['HbA1c: 6.1 %; age 30; sample number 100','HbA1c: 6.1 %\nGlucose: 112 mg/dL; reference: 70 - 99','HbA1c: 6.1 %; Glucose: 112 mg/dL; reference: 70 - 99']) {
+    const record=normalizeExtraction({observations:[{name:'HbA1c',value:6.1,unit:'%',referenceLow:30,referenceHigh:100,sourceText}]},{sourceText});
+    assert.equal(record.observations[0].referenceLow,null,sourceText);
+    assert.equal(record.observations[0].referenceHigh,null,sourceText);
+  }
+  const fake='HbA1c: 6.1 %; reference: 4 - 5.6';
+  const record=normalizeExtraction({observations:[{name:'HbA1c',value:6.1,unit:'%',sourceText:fake}]},{sourceText:'No readable laboratory results.'});
+  assert.equal(record.observations[0].referenceLow,null);
+});
+
+test('keeps printed range-before-result, table rows, and Hindi ranges without borrowing values',()=>{
+  for(const [sourceText,name,value,unit,low,high] of [
+    ['HbA1c (4.0 - 5.6 %): 6.1 %','HbA1c',6.1,'%',4,5.6],
+    ['Fasting glucose | 112 mg/dL | 70 - 99','Fasting glucose',112,'mg/dL',70,99],
+    ['हीमोग्लोबिन: १४.२ g/dL; संदर्भ सीमा: १३ से १७','हीमोग्लोबिन',14.2,'g/dL',13,17],
+  ]) {
+    const [o]=normalizeExtraction({observations:[{name,value,unit,referenceLow:low,referenceHigh:high,sourceText}]},{sourceText}).observations;
+    assert.deepEqual([o.value,o.referenceLow,o.referenceHigh],[value,low,high],sourceText);
+  }
+});
+
+test('drops negated, uncertain, family-history, and nonclinical disease mentions even with shortened snippets',()=>{
+  const contexts=['No evidence of Diabetes.','Family history: Diabetes.','Father has Diabetes.','Diagnosis: possible Diabetes.','Rule out Diabetes.','Diagnosis: Diabetes?','मधुमेह नहीं है।','पारिवारिक इतिहास: मधुमेह।','संभावित निदान: मधुमेह।'];
+  for(const sourceText of contexts){
+    const name=sourceText.includes('Diabetes')?'Diabetes':'मधुमेह';
+    const r=normalizeExtraction({diagnoses:[{name,sourceText:name}]},{sourceText});
+    assert.equal(r.diagnoses.length,0,sourceText);
+  }
+  for(const [sourceText,name] of [['Diagnosis: Acute gastroenteritis.','Acute gastroenteritis'],['निदान: मधुमेह।','मधुमेह']]) {
+    assert.equal(normalizeExtraction({diagnoses:[{name,sourceText}]},{sourceText}).diagnoses.length,1);
+  }
+});
+
+test('requires document evidence for provider and document date without using a birth date',()=>{
+  const sourceText='Date of birth: 1992-08-15\nReport date: 13/10/2026\nGreenfield Clinic';
+  assert.equal(normalizeExtraction({date:'2026-10-13',provider:'Greenfield Clinic'},{sourceText}).date,'2026-10-13');
+  const fake=normalizeExtraction({date:'2026-01-01',provider:'Invented Hospital'},{sourceText});
+  assert.equal(fake.date,null);assert.equal(fake.provider,'Provider not recorded');
+  assert.equal(normalizeExtraction({date:'1992-08-15'},{sourceText}).date,null);
+  assert.equal(normalizeExtraction({date:'2026-10-11'},{sourceText:'Report date: 11/10/2026'}).date,null);
+});
+
+test('keeps clear medicine names but never reconstructs a disputed dose or medicine fragment',()=>{
+  for(const sourceText of ['Metformin: [unclear] 500 mg; once daily','Metformin: 5[unclear]0 mg; once daily']) {
+    const med={name:'Metformin',dosage:'500 mg',frequency:'once daily',sourceText};
+    const r=normalizeExtraction({medications:[med]},{sourceText});
+    assert.equal(r.medications.length,1);assert.equal(r.medications[0].dosage,'');assert.equal(r.medications[0].frequency,'once daily');
+  }
+  const sourceText='Met[unclear]formin: 500 mg';
+  assert.equal(normalizeExtraction({medications:[{name:'Met',dosage:'500 mg',sourceText}]},{sourceText}).medications.length,0);
+  const allergy='Allergies: Penicillin';
+  assert.equal(normalizeExtraction({medications:[{name:'Penicillin',sourceText:'Penicillin'}]},{sourceText:allergy}).medications.length,0);
+});
+
+test('medication fields cannot come from another medicine in a broad source quote', () => {
+  for (const separator of ['\n', '; ', ', ']) {
+    const sourceText = `Metformin: 500 mg; once daily${separator}Aspirin: 100 mg; twice daily; for 3 days; with water`;
+    const record = normalizeExtraction({medications:[{name:'Metformin',dosage:'100 mg',frequency:'twice daily',duration:'3 days',instructions:'with water',sourceText}]},{sourceText});
+    assert.equal(record.medications.length, 1);
+    assert.deepEqual(Object.fromEntries(['dosage','frequency','duration','instructions'].map(field => [field,record.medications[0][field]])), {dosage:'',frequency:'',duration:'',instructions:''});
+    assert.equal(record.medications[0].sourceText, sourceText, 'the original quote remains available for review');
+  }
+});
+
+test('clear medicine continuation lines survive until the next named medicine', () => {
+  const sourceText = 'Metformin:\n500 mg\nFrequency: once daily\nDuration: 30 days\nTake after food\nAspirin: 100 mg; twice daily\nAllergy: Penicillin';
+  const record = normalizeExtraction({medications:[{name:'Metformin',dosage:'500 mg',frequency:'once daily',duration:'30 days',instructions:'Take after food',sourceText}]},{sourceText});
+  assert.equal(record.medications.length, 1);
+  assert.deepEqual(Object.fromEntries(['dosage','frequency','duration','instructions'].map(field => [field,record.medications[0][field]])), {dosage:'500 mg',frequency:'once daily',duration:'30 days',instructions:'Take after food'});
+});
+
+test('a later number in the same medicine row cannot replace its prescribed dose', () => {
+  const sourceText = 'Metformin: 500 mg for 30 days; dispense 100 mg';
+  const record = normalizeExtraction({medications:[{name:'Metformin',dosage:'100 mg',sourceText}]},{sourceText});
+  assert.equal(record.medications[0].dosage, '');
+});
+
+test('instruction-looking continuations cannot attach another medicine frequency', () => {
+  for (const sourceText of [
+    'Metformin 500 mg once daily; take Aspirin 100 mg twice daily.',
+    'Metformin 500 mg once daily; 100 mg Aspirin twice daily.',
+    'Metformin 500 mg once daily and Aspirin 100 mg twice daily.',
+    'Metformin 500 mg once daily Aspirin 100 mg twice daily.',
+  ]) {
+    const record = normalizeExtraction({medications:[{name:'Metformin',dosage:'500 mg',frequency:'twice daily',sourceText}]},{sourceText});
+    assert.equal(record.medications[0].dosage,'500 mg');
+    assert.equal(record.medications[0].frequency,'',sourceText);
+  }
+});
+
+test('ratios, fractions, comma decimals and uncertain suffixes never become scalar results', () => {
+  for (const [printed,value] of [['1:160',1],['1/2',1],['5,2',5],['112?',112],['112 mg/dL?',112],['112-120',112],['1.2.3',1.2]]) {
+    const sourceText = `Glucose: ${printed} mg/dL; reference: 0 - 200`;
+    const record = normalizeExtraction({observations:[{name:'Glucose',value,unit:'mg/dL',sourceText}]},{sourceText});
+    assert.equal(record.observations[0].value, null, printed);
+    assert.equal(record.observations[0].status, 'unknown', printed);
+  }
+});
+
+test('known tests receive bounded bilingual education without changing result evidence', () => {
+  const cases = [
+    ['HbA1c', /average blood glucose/i, /औसत रक्त शर्करा/],
+    ['Fasting glucose', /after fasting/i, /उपवास/],
+    ['Hemoglobin', /oxygen/i, /ऑक्सीजन/],
+    ['Vitamin D', /calcium/i, /कैल्शियम/],
+  ];
+  for (const [name,en,hi] of cases) {
+    const observation = {name,value:112,unit:'mg/dL',referenceLow:70,referenceHigh:99};
+    const explanation = explainObservation(observation);
+    assert.match(explanation.en,en); assert.match(explanation.hi,hi);
+    assert.match(explanation.en,/112 mg\/dL/); assert.match(explanation.en,/above this report's reference range/);
+    assert.match(explanation.hi,/112 mg\/dL/); assert.match(explanation.hi,/निदान नहीं/);
+  }
+  assert.doesNotMatch(explainObservation({name:'Hemoglobin variant unknown',value:1}).en,/oxygen/i);
+  assert.match(explainObservation({name:'HbA1c',value:null}).en,/readable numeric value is not available/);
+});
+
+test('preserves bounded trusted OCR comparison evidence and ignores model attempts to set it',()=>{
+  const ocr={mode:'verified',status:'disagreement',verificationModel:'test-vision',disagreementCount:2,pages:[{page:1,firstPass:'Metformin 500 mg',secondPass:'Metformin 850 mg',consensus:'Metformin [unclear] mg',disagreementCount:2}],preprocessing:['contrast grayscale'],secret:'omit'};
+  const r=normalizeExtraction({provenance:{ocr:{status:'agreement'}}},{...metadata,provenance:{mode:'live',extractionModel:'test',ocr}});
+  assert.equal(r.provenance.ocr.status,'disagreement');assert.equal(r.provenance.ocr.pages[0].consensus,'Metformin [unclear] mg');assert.equal(r.provenance.ocr.secret,undefined);
+  const untrusted=normalizeExtraction({provenance:{ocr}},{...metadata});assert.equal(untrusted.provenance.ocr,undefined);
 });
 
 test('rejects non-object extraction output and bounds array and string sizes', () => {
@@ -163,6 +288,14 @@ test('FHIR missing values remain absent and results never manufacture Conditions
   assert.equal(observations[1].dataAbsentReason.coding[0].code,'unknown');
   assert.equal(bundle.entry.find(e=>e.resource.resourceType==='MedicationStatement').resource.status,'unknown');
   assert.match(JSON.stringify(bundle),/prototype|unvalidated/i);
+});
+
+test('FHIR does not promote older stored negated or family-history mentions into patient Conditions',()=>{
+  for(const sourceText of ['No evidence of Diabetes.','Family history: Diabetes.','Diagnosis: possible Diabetes.']) {
+    const record=recordForFhir();record.sourceText=sourceText;record.diagnoses=[{name:'Diabetes',sourceText:'Diabetes'}];
+    const bundle=buildFhirBundle(patient,[record]);
+    assert.ok(!bundle.entry.some(entry=>entry.resource.resourceType==='Condition'),sourceText);
+  }
 });
 
 // --- Regression: a reference range printed BEFORE the result must not be read as the result.

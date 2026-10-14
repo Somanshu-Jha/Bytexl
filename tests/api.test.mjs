@@ -334,3 +334,91 @@ test('refuses to honour a non-loopback entry in SEHAT_DEV_ORIGINS', async (t) =>
   });
   assert.equal(refused.status, 403);
 });
+
+test('unresolved OCR requires an explicit acknowledgment and corrections invalidate old review', async t => {
+  const { request, store } = await fixture(t);
+  const original = store.listRecords().find(record=>record.observations.length);
+  const patch = body => request(`/api/records/${original.id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  for(const [status,count,marker] of [['disagreement',1,false],['verification-unavailable',0,false],['agreement',0,true]]) {
+    store.saveRecord({...structuredClone(original),reviewStatus:'pending',sourceText:original.sourceText+(marker?'\n[unclear]':''),provenance:{...original.provenance,ocr:{mode:'verified',status,disagreementCount:count,pages:[],preprocessing:[]}}});
+    const rejected=await patch({reviewStatus:'reviewed'});
+    assert.equal(rejected.status,400,`${status}, unclear=${marker}`);
+    assert.match((await rejected.json()).error,/acknowledge|OCR/i);
+    assert.equal(store.getRecord(original.id).reviewStatus,'pending');
+    assert.equal((await patch({reviewStatus:'reviewed',acknowledgeOcrWarnings:'true'})).status,400);
+    const approved=await patch({reviewStatus:'reviewed',acknowledgeOcrWarnings:true});
+    assert.equal(approved.status,200);
+    const reviewed=await approved.json();
+    assert.equal(reviewed.reviewStatus,'reviewed');
+    assert.ok(Number.isFinite(Date.parse(reviewed.provenance.ocrWarningsAcknowledgedAt)));
+    assert.equal(reviewed.provenance.ocr.status,status);
+    const edited=await patch({observations:[{id:original.observations[0].id,value:6.2}]});
+    assert.equal(edited.status,200);
+    const corrected=await edited.json();
+    assert.equal(corrected.reviewStatus,'pending');
+    assert.equal(corrected.provenance.ocrWarningsAcknowledgedAt,undefined);
+    assert.equal((await patch({reviewStatus:'reviewed'})).status,400);
+  }
+});
+
+test('medicine-only corrections preserve source evidence and require valid nonempty names',async t=>{
+  const {request,store}=await fixture(t);
+  const record=store.listRecords().find(r=>r.type==='prescription');
+  const patch=body=>request(`/api/records/${record.id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const medication=record.medications[0];
+  const corrected=await patch({medications:[{id:medication.id,name:medication.name,dosage:'2000 IU',frequency:'once daily',duration:'6 weeks',instructions:'Manual correction from the original.',sourceText:'forged evidence'}]});
+  assert.equal(corrected.status,200);
+  const saved=await corrected.json();
+  assert.equal(saved.medications[0].dosage,'2000 IU');assert.equal(saved.medications[0].sourceText,medication.sourceText);
+  assert.equal(saved.reviewStatus,'pending');assert.match(saved.provenance.warnings.join(' '),/reviewer corrected/i);
+  assert.equal((await patch({medications:[{id:medication.id,name:''}]})).status,400);
+  assert.equal((await patch({medications:[null]})).status,400);
+});
+
+test('corrections may leave an unknown provider blank while title remains required', async t => {
+  const {request,store}=await fixture(t);
+  const record=store.listRecords().find(r=>r.observations.length);
+  const patch=body=>request(`/api/records/${record.id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const saved=await patch({provider:'',observations:[{id:record.observations[0].id,value:6.3}]});
+  assert.equal(saved.status,200);
+  const corrected=await saved.json();
+  assert.equal(corrected.provider,''); assert.equal(corrected.observations[0].value,6.3);
+  assert.equal(corrected.sourceText,record.sourceText);
+  assert.equal((await patch({title:''})).status,400);
+  assert.equal((await patch({provider:null})).status,400);
+});
+
+test('upload rejects malformed handwriting option instead of treating it as consent',async t=>{
+  const {request}=await fixture(t);
+  const options=upload('SYNTHETIC LAB REPORT\nHbA1c: 6.1 % (reference: 4 - 5.6)');
+  options.body.append('handwriting','yes');
+  assert.equal((await request('/api/records',options)).status,400);
+});
+
+test('handwriting upload persists both readings, withholds disputed medicine dose, and enforces review acknowledgment',async t=>{
+  let calls=0;
+  let extractionInput='';
+  const nim={...noNim,configured:true,async vision(){
+    return `SYNTHETIC PRESCRIPTION\nDate: 2026-10-14\nMetformin: ${++calls===1?'500':'850'} mg; once daily\nHbA1c: 6.1 %; reference: 4.0 - 5.6`;
+  },async extract(sourceText){
+    extractionInput=sourceText;
+    return {type:'prescription',date:'2026-10-14',observations:[{name:'HbA1c',value:6.1,unit:'%',referenceLow:4,referenceHigh:5.6,sourceText:'HbA1c: 6.1 %; reference: 4.0 - 5.6'}],medications:[{name:'Metformin',dosage:'500 mg',frequency:'once daily',sourceText:'Metformin: [unclear] mg; once daily'}]};
+  }};
+  const {request,store}=await fixture(t,{nim});
+  const canvas=createCanvas(320,200);
+  const context=canvas.getContext('2d');
+  context.fillStyle='#ddd9cd';context.fillRect(0,0,320,200);
+  context.fillStyle='#42398c';context.font='20px sans-serif';
+  context.fillText('SYNTHETIC PRESCRIPTION',10,40);
+  const image=canvas.toBuffer('image/png');
+  const options=upload(image,{filename:'handwriting.png',type:'image/png'});options.body.append('handwriting','true');
+  const queued=await request('/api/records',options);assert.equal(queued.status,202);
+  const job=await completed(request,(await queued.json()).id);assert.equal(job.status,'completed',job.error);
+  const record=store.getRecord(job.recordId);
+  assert.equal(calls,2);assert.match(extractionInput,/\[unclear\]/);assert.ok(!extractionInput.includes('500'));assert.ok(!extractionInput.includes('850'));
+  assert.equal(record.medications[0].dosage,'');assert.equal(record.medications[0].frequency,'once daily');
+  assert.equal(record.provenance.ocr.status,'disagreement');assert.match(record.provenance.ocr.pages[0].firstPass,/500/);assert.match(record.provenance.ocr.pages[0].secondPass,/850/);
+  const patch=body=>request(`/api/records/${record.id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  assert.equal((await patch({reviewStatus:'reviewed'})).status,400);
+  assert.equal((await patch({reviewStatus:'reviewed',acknowledgeOcrWarnings:true})).status,200);
+});

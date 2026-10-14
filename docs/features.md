@@ -4,6 +4,14 @@ A guided tour of every screen and control, written from the running application.
 
 Everything you see by default belongs to **Aarav Sharma, a fictional patient**. The six seed records are synthetic. The app labels itself `SYNTHETIC DEMO WORKSPACE` throughout, and the footer states it is a health information companion rather than a medical professional. Keep using synthetic data until you have deliberately replaced the workspace.
 
+## One-click startup and handwriting review
+
+Double-click **START_SEHAT.bat** to build and start the frontend and API together at **http://127.0.0.1:3001**. The service runs in the background; **STOP_SEHAT.bat** stops only that managed instance. The launcher does not terminate applications using its port. The development command below remains available separately.
+
+For difficult images, enable **Handwritten prescription or difficult image** before consenting to upload. Two OCR readings are compared. Disputed text becomes [unclear]; both readings are visible in the source tab. Agreement is not an accuracy guarantee. Unclear or unchecked handwriting requires an explicit review acknowledgment; correcting fields resets the acknowledgment.
+
+**Correct details** is available for every record type, including prescriptions with no lab values. Medication name, dose, frequency, duration and written instructions can be corrected while the original source text is retained.
+
 ## Starting it
 
 ```powershell

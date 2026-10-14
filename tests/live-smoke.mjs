@@ -4,6 +4,7 @@ import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createApp } from '../server/index.mjs';
+import assert from 'node:assert/strict';
 
 const folder = await mkdtemp(join(tmpdir(), 'sehat-live-'));
 const { app, store } = createApp({ databasePath: join(folder, 'smoke.sqlite'), seed: false });
@@ -32,6 +33,16 @@ try {
     }
     if (job.status !== 'completed') throw new Error(`${extension}: ${job.error || 'Processing timed out'}`);
     const record = store.getRecord(job.recordId);
+    const expected = [
+      ['HbA1c',6.1,'%',4,5.6,'high'], ['Fasting glucose',112,'mg/dL',70,99,'high'],
+      ['Hemoglobin',14.2,'g/dL',13,17,'normal'], ['Vitamin D',24,'ng/mL',30,100,'low'],
+    ];
+    assert.equal(record.observations.length,4,`${extension}: all four supported sample values are required`);
+    for(const [name,value,unit,low,high,status] of expected){
+      const observation=record.observations.find(o=>o.name.toLowerCase()===name.toLowerCase());
+      assert.ok(observation,`${extension}: ${name} missing`);
+      assert.deepEqual([observation.value,observation.unit,observation.referenceLow,observation.referenceHigh,observation.status],[value,unit,low,high,status]);
+    }
     console.log(JSON.stringify({ type: extension, elapsedSeconds: Math.round((Date.now() - started) / 100) / 10, mode: record.provenance.mode, observations: record.observations.map(({ name, value, unit, referenceLow, referenceHigh, status }) => ({ name, value, unit, referenceLow, referenceHigh, status })), warnings: record.provenance.warnings }));
   }
   for (const language of ['en', 'hi']) {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { classifyObservation } from './domain.mjs';
+import { classifyObservation, supportedDiagnosis } from './domain.mjs';
 
 const interpretationCodes = { normal: 'N', high: 'H', low: 'L' };
 const documentTypes = { lab: 'Laboratory report', prescription: 'Prescription', discharge: 'Discharge summary', diagnostic: 'Diagnostic report' };
@@ -65,7 +65,7 @@ export function buildFhirBundle(patient, records = []) {
       targets.push(add(resource));
     }
     // Conditions are created only from explicitly recorded diagnoses, never lab flags.
-    for (const diagnosis of record.diagnoses ?? []) targets.push(add({
+    for (const diagnosis of (record.diagnoses ?? []).filter(item => supportedDiagnosis(record.sourceText, item.sourceText, item.name))) targets.push(add({
       resourceType: 'Condition', subject, code: { text: diagnosis.name },
       verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-ver-status', code: 'unconfirmed' }] },
       evidence: [{ detail: [source] }], note: [annotation(diagnosis.sourceText), annotation('Diagnosis transcribed from the source; not independently clinically verified.')],

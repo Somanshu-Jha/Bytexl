@@ -4,13 +4,15 @@ Use only synthetic records. The six seeded records belong to fictional Aarav Sha
 
 ## Before presenting
 
-- Run `npm run dev` and open `http://127.0.0.1:5173`. Keep the app in English and the October **Preventive health panel** pending review.
+- Double-click `START_SEHAT.bat` and open `http://127.0.0.1:3001`. Keep the app in English and the October **Preventive health panel** pending review.
 - Keep `public/samples/aarav-blood-panel.txt` and `public/samples/aarav-blood-panel.png` available. The TXT route is quickest. The PNG route demonstrates vision when NVIDIA is configured.
 - Confirm `/api/health` responds and inspect the configured models. A present credential does not guarantee service availability. Try the synthetic sample before the session.
-- Open `http://127.0.0.1:5173/presentation.html` in a second tab. Arrow keys change slides. The print button produces one slide per page.
+- Open `http://127.0.0.1:3001/presentation.html` in a second tab. Arrow keys change slides. The print button produces one slide per page.
 - If you need a fresh workspace, intentionally call `POST /api/demo/reset` before presenting. It replaces current records and the profile with the synthetic seed. Do not use it on work you intend to keep.
 
 ## 0:00–0:25 · The record workspace
+
+Optional handwriting segment: use `public/samples/handwriting-demo.png`, a visibly synthetic layout containing a licensed handwritten word crop. Enable **Handwritten prescription or difficult image**. Show the two readings and any disagreement. The model has reordered text on this sample in live tests, so do not promise full extraction or hide abstention. Explain that OCR agreement does not prove a medication or dose is correct; unclear prescriptions need their prescriber. The main clean-report demo below remains the predictable route.
 
 Show **Overview**.
 

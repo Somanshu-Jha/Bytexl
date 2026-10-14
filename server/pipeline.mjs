@@ -1,5 +1,5 @@
-import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { normalizeExtraction } from './domain.mjs';
+import { prepareOcrImages, transcribeWithReview, HANDWRITING_OCR_BUDGET_MS, OcrInputError } from './ocr.mjs';
 
 export class DocumentError extends Error {
   constructor(message, status = 400) { super(message); this.name = 'DocumentError'; this.status = status; }
@@ -38,19 +38,31 @@ function cleanSource(text) {
   return cleaned;
 }
 
-async function imageForOcr(buffer) {
-  let image;
-  try { image = await loadImage(buffer); } catch { throw new DocumentError('The image could not be decoded. Export it as a new PNG or JPEG and try again.'); }
-  if (!image.width || !image.height || image.width * image.height > 40000000) throw new DocumentError('The image dimensions are too large. Resize it to below 40 megapixels.');
-  const scale = Math.min(1, 1800 / Math.max(image.width, image.height));
-  const canvas = createCanvas(Math.round(image.width * scale), Math.round(image.height * scale));
-  const context = canvas.getContext('2d');
-  context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/jpeg', 0.9);
+function hasMedicalReviewEvidence(ocr, sourceText) {
+  if (ocr?.mode !== 'verified' || !ocr.pages?.length || !ocr.pages.every(page => page.firstPass?.trim() && page.secondPass?.trim())) return false;
+  // Use only agreed readable context. Raw alternative readings must not turn a
+  // blank/nonmedical upload into a medical draft because a model invented a chart.
+  const clearLines = sourceText.split(/\r?\n/).map(line => line.trim()).filter(line => line && !/\[unclear\]/i.test(line));
+  const context = clearLines.join('\n').normalize('NFKC');
+  if (context.length < 80 || clearLines.length < 4) return false;
+  const identity = /(?:^|\n)\s*(?:patient|provider|report date|date|clinic|hospital|रोगी|मरीज़|मरीज|दिनांक)\s*[:|]/i.test(context);
+  const documentKind = /\b(?:prescription|discharge summary|diagnostic report|laboratory report|lab report)\b|प्रिस्क्रिप्शन|चिकित्सकीय पर्चा|जाँच रिपोर्ट|जांच रिपोर्ट|डिस्चार्ज/i.test(context);
+  const medicineSections = /\b(?:medicine|medication|drug|rx)\b|दवा/i.test(context) && /\b(?:dose|dosage|frequency|duration)\b|खुराक/i.test(context);
+  const laboratorySections = /\b(?:test|analyte|laboratory|lab)\b|जाँच|जांच/i.test(context) && /\b(?:result|reference range)\b|परिणाम|संदर्भ सीमा/i.test(context);
+  return identity && (documentKind || medicineSections || laboratorySections);
 }
 
-async function readPdf(buffer, nim, stage) {
+async function readImage(buffer, nim, stage, { handwriting, page = 1, deadline }) {
+  try {
+    const images = await prepareOcrImages(buffer, { handwriting });
+    return await transcribeWithReview(images, nim, { handwriting, page, deadline, stage });
+  } catch (error) {
+    if (error instanceof OcrInputError) throw new DocumentError(error.message);
+    throw error;
+  }
+}
+
+async function readPdf(buffer, nim, stage, { handwriting = false, deadline } = {}) {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   let document;
   let loadingTask;
@@ -63,14 +75,17 @@ async function readPdf(buffer, nim, stage) {
   }
   try {
     if (document.numPages > MAX_PAGES) throw new DocumentError(`This prototype accepts up to ${MAX_PAGES} PDF pages. Split the document and try again.`);
+    if (handwriting && document.numPages > 2) throw new DocumentError('Handwriting comparison supports up to 2 PDF pages per upload. Split this document into smaller files.');
     const parts = [];
+    const warnings = [];
+    const comparedPages = [];
     let ocrPages = 0;
     for (let number = 1; number <= document.numPages; number++) {
       stage(`Reading document · page ${number} of ${document.numPages}`);
       const page = await document.getPage(number);
-      const content = await page.getTextContent();
       let text = '';
       let lastY = null;
+      const content = handwriting ? { items: [] } : await page.getTextContent();
       for (const item of content.items) {
         if (!('str' in item)) continue;
         const y = item.transform?.[5];
@@ -78,12 +93,12 @@ async function readPdf(buffer, nim, stage) {
         text += item.str + (item.hasEOL ? '\n' : ' ');
         lastY = y;
       }
-      if (text.replace(/\s/g, '').length < 50) {
+      if (handwriting || text.replace(/\s/g, '').length < 50) {
         if (!nim.configured) throw new DocumentError('This PDF needs vision OCR. Configure the NVIDIA API key on the server, or upload a readable text document.', 503);
         if (++ocrPages > MAX_OCR_PAGES) throw new DocumentError(`Scanned PDFs are limited to ${MAX_OCR_PAGES} pages per upload. Split this document.`);
         stage(`Reading image with vision model · page ${number} of ${document.numPages}`);
         const natural = page.getViewport({ scale: 1 });
-        const viewport = page.getViewport({ scale: Math.min(2, 1800 / Math.max(natural.width, natural.height)) });
+        const viewport = page.getViewport({ scale: Math.min(handwriting ? 3 : 2, (handwriting ? 2200 : 1800) / Math.max(natural.width, natural.height)) });
         // PDF.js may own a different native canvas version; its factory prevents
         // incompatible native handles crossing between renderer and target.
         const target = document.canvasFactory.create(Math.round(viewport.width), Math.round(viewport.height));
@@ -92,12 +107,23 @@ async function readPdf(buffer, nim, stage) {
           await page.render({ canvasContext: target.context, viewport, canvas: target.canvas }).promise;
           dataUrl = target.canvas.toDataURL('image/jpeg', 0.9);
         } finally { document.canvasFactory.destroy(target); }
-        text = await nim.vision(dataUrl);
+        const result = await readImage(dataUrl, nim, stage, { handwriting, page: number, deadline });
+        text = result.text;
+        warnings.push(...result.warnings);
+        if (result.ocr) comparedPages.push(result.ocr);
       }
       parts.push(text.trim());
       page.cleanup();
     }
-    return { text: parts.join('\n\n'), usedVision: ocrPages > 0 };
+    let ocr;
+    if (comparedPages.length) ocr = {
+      mode: 'verified', verificationModel: comparedPages[0].verificationModel,
+      status: comparedPages.some(result => result.status === 'verification-unavailable') ? 'verification-unavailable' : comparedPages.some(result => result.status === 'disagreement') ? 'disagreement' : 'agreement',
+      disagreementCount: comparedPages.reduce((total, result) => total + result.disagreementCount, 0),
+      pages: comparedPages.flatMap(result => result.pages),
+      preprocessing: [...new Set(comparedPages.flatMap(result => result.preprocessing))],
+    };
+    return { text: parts.join('\n\n'), usedVision: ocrPages > 0, warnings: [...new Set(warnings)], ocr };
   } finally { await loadingTask.destroy(); }
 }
 
@@ -149,26 +175,30 @@ export function localExtract(sourceText) {
   return { title: 'Uploaded laboratory report', type: 'lab', date, provider, observations, medications, diagnoses: [] };
 }
 
-export async function processDocument(file, nim, stage = () => {}) {
+export async function processDocument(file, nim, stage = () => {}, { handwriting = false } = {}) {
   const kind = validateFile(file);
+  handwriting = handwriting === true && kind !== 'text';
   stage('Reading document');
   let sourceText;
   let usedVision = false;
+  const warnings = [];
+  let ocr;
+  const deadline = handwriting ? Date.now() + HANDWRITING_OCR_BUDGET_MS : undefined;
   if (kind === 'text') sourceText = file.buffer.toString('utf8');
   else if (kind === 'pdf') {
-    const result = await readPdf(file.buffer, nim, stage);
+    const result = await readPdf(file.buffer, nim, stage, { handwriting, deadline });
     sourceText = result.text; usedVision = result.usedVision;
+    warnings.push(...result.warnings); ocr = result.ocr;
   } else {
     if (!nim.configured) throw new DocumentError('Image OCR requires NVIDIA AI. Configure the server API key, or upload a readable text report.', 503);
-    stage('Reading image with vision model');
-    sourceText = await nim.vision(await imageForOcr(file.buffer));
+    const result = await readImage(file.buffer, nim, stage, { handwriting, deadline });
+    sourceText = result.text; warnings.push(...result.warnings); ocr = result.ocr;
     usedVision = true;
   }
   sourceText = cleanSource(sourceText);
   stage(nim.configured ? 'Extracting structured fields' : 'Extracting with local parser');
   const raw = nim.configured ? await nim.extract(sourceText) : localExtract(sourceText);
   stage('Validating source evidence');
-  const warnings = [];
   if (!nim.configured) warnings.push('Limited local parser used; no AI model was called. Only explicit laboratory rows were extracted.');
   if (usedVision) warnings.push('Vision transcription can misread handwriting, decimals and table columns. Verify against the original document.');
   const record = normalizeExtraction(raw, {
@@ -177,10 +207,23 @@ export async function processDocument(file, nim, stage = () => {}) {
       mode: nim.configured ? 'live' : 'local',
       extractionModel: nim.configured ? nim.models.extraction : 'deterministic-lab-parser',
       ...(usedVision ? { visionModel: nim.models.vision } : {}),
+      ...(ocr ? { ocr } : {}),
       processedAt: new Date().toISOString(), warnings,
     },
   });
-  if (!record.observations.length && !record.medications.length && !record.diagnoses.length) {
+  const anyFields = record.observations.length || record.medications.length || record.diagnoses.length;
+  const reliableFields = record.observations.some(observation => typeof observation.value === 'number' && Number.isFinite(observation.value)) || record.medications.length || record.diagnoses.length;
+  if (!anyFields || (handwriting && !reliableFields)) {
+    if (handwriting && hasMedicalReviewEvidence(ocr, sourceText)) {
+      record.observations = []; record.medications = []; record.diagnoses = []; record.keyPoints = [];
+      record.reviewStatus = 'pending';
+      record.summary = {
+        en: 'No clinical fields could be verified. Review the original or upload a clearer image. Ask the prescriber about any unreadable medicine name or dose; do not guess.',
+        hi: 'किसी भी चिकित्सकीय विवरण की पुष्टि नहीं हो सकी। मूल दस्तावेज़ देखें या अधिक स्पष्ट तस्वीर अपलोड करें। अस्पष्ट दवा के नाम या खुराक के बारे में लिखने वाले चिकित्सक से पूछें; अनुमान न लगाएँ।',
+      };
+      record.provenance.warnings.push('Evidence-only draft: no clinical fields could be verified. Both OCR readings are retained only for original-document review; do not use them as medication or dosing instructions.');
+      return record;
+    }
     throw new DocumentError('No source-supported medical facts could be extracted. Please upload a clearer medical record.');
   }
   return record;

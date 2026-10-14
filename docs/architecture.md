@@ -10,7 +10,11 @@ flowchart TD
     Read -->|TXT or readable PDF| Text[Source text]
     Read -->|Image or scanned PDF| Render[Canvas image / PDF page rendering]
     Render -->|Configured NVIDIA credential| Vision[NIM Llama 3.2 Vision]
-    Vision --> Text
+    Vision --> Handwriting{Handwriting mode?}
+    Handwriting -->|No| Text
+    Handwriting -->|Yes| Compare[Compare original and contrast-adjusted OCR readings]
+    Compare --> Mask[Mask disputed text as unclear]
+    Mask --> Text
     Text --> Mode{AI configured?}
     Mode -->|Yes| Extraction[NIM Nemotron Super: structured JSON]
     Mode -->|No| Local[Limited deterministic lab parser]
@@ -40,6 +44,7 @@ flowchart TD
 | API client | `src/api.ts` | Typed JSON and multipart requests |
 | HTTP service | `server/index.mjs` | Loopback requests, route validation, jobs, review, safe chat boundary and export |
 | Document pipeline | `server/pipeline.mjs` | Signature validation, PDF text, page/image rendering, orchestration and local lab parser |
+| Handwriting comparison | `server/ocr.mjs` | EXIF-aware decode, grayscale contrast, bounded second reading, text comparison and retained raw readings |
 | Inference client | `server/nim.mjs` | Server-only credential, model routing, timeout, structured response parsing and provider errors |
 | Grounded chat | `server/chat.mjs` | Saved fact catalog, relevance selection validation, deterministic answer and citations |
 | Domain boundary | `server/domain.mjs` | Bounded normalization, evidence checks, missingness, range flags and bilingual templates |
@@ -54,6 +59,10 @@ The canonical record has its own ID, document date (or `null`), provider, filena
 `POST /api/records` accepts a single multipart file only with `consent=true`. It validates file content and immediately returns a persisted job. Processing updates the job stage. A successful result persists a new pending record and records its ID on the completed job. Failures persist a failed job with a user-readable error. On restart, queued/processing jobs become failed with a retry explanation.
 
 Text PDFs use embedded text. Pages with little usable text are rendered before OCR, with a bounded number of scanned pages. Images are decoded and resized to at most 1800 pixels on their longest side before inference. PDF pages remain in source order. Provider calls have a 90-second timeout per call and reject empty, unreadable, or token-truncated output.
+
+When multipart `handwriting=true`, images use a 2200-pixel bound. Both the original and a mildly contrast-adjusted grayscale image are transcribed separately. Comparison preserves clinically meaningful symbols, including decimals, units, comparison qualifiers and Devanagari numerals. Disputed text becomes `[unclear]` before extraction. Handwriting PDFs are rendered even if an embedded text layer exists, with at most two pages. OCR has a 120-second document budget and 45-second handwriting pass limits. Two readings using the same model are a consistency check, not independent evidence of clinical accuracy. An optional `NIM_OCR_VERIFICATION_MODEL` can select a separately evaluated model; the default uses the tested vision model.
+
+Raw readings, consensus, disagreement counts and preprocessing steps are retained in `provenance.ocr`. A second-pass failure is explicitly labeled. Records with disagreements or unreadable text require `acknowledgeOcrWarnings=true` on the reviewed PATCH. The timestamp records the user's acknowledgment, not medical validation. Editing fields clears this acknowledgment and returns the record to pending review. Original OCR text is not overwritten by corrections.
 
 Raw upload bytes live in memory for the job and are released afterward. The database stores extracted source text, normalized fields, provenance, and profile data. Original files do not have public download routes. The user should retain the original document because OCR text alone is insufficient to verify a difficult scan. SQLite uses a local WAL journal and parameterized statements. Deleting a record removes it from the application store; this is not a certified secure-erasure mechanism.
 
@@ -78,6 +87,7 @@ The inference client reads `NVIDIA_API_KEY` from the server environment. The bro
 - Clinical snippets must appear in source text. Observation names and units must have supporting text. Numeric results must match a reported result after the analyte name. Missing, nonfinite, qualified, or unsupported numeric values stay `null`.
 - Ranges come from the document. A two-sided valid range supports `low`, `normal`, or `high`; otherwise the comparison is `unknown`. An out-of-range flag does not generate a diagnosis.
 - Medication names and written instruction fields require supporting snippets. A past prescription does not establish current medication use or adherence.
+- Dates and providers need source support; family-history, negated and uncertain disease mentions do not become patient diagnoses. FHIR export applies the same diagnosis guard to older stored records.
 - Review corrections preserve the original extracted source and add a provenance warning. The reviewer can correct OCR errors, including numbers, and the API recalculates flags and explanations. “Reviewed” describes source review, not medical attestation.
 - Chat checks common emergency, diagnosis, and dosage-change requests before inference. The hosted model selects only catalog fact IDs. Unknown IDs, malformed selections, or provider errors trigger a local summary; accepted selections render existing fact text and its source citations. Pattern checks, extraction quality, and relevance selection still have limits and require clinical evaluation before real use.
 

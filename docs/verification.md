@@ -1,3 +1,5 @@
+> Historical verification from 13 October 2026. See [14 October verification](verification-2026-10-14.md) for the current build, handwriting safeguards, and fixes to the limitations recorded below.
+
 # Sehat — Verification Record
 
 What was actually run, on what, and what it showed. Every number below is copied from a command that was executed on **2026-10-13**; nothing here is an estimate or an accuracy claim.

@@ -106,7 +106,7 @@ test.describe('upload consent', () => {
     const submit = dialog.locator('button', { hasText: 'Read my record' });
     await expect(submit).toBeDisabled();
 
-    await dialog.locator('input[type="checkbox"]').first().check();
+    await dialog.getByRole('checkbox', { name: /I agree to send/ }).check();
     await expect(submit).toBeEnabled();
   });
 
@@ -117,7 +117,7 @@ test.describe('upload consent', () => {
     await page.locator('button', { hasText: 'Add your next record' }).first().click();
     const uploadDialog = page.getByRole('dialog');
     await uploadDialog.locator('input[type="file"]').setInputFiles('public/samples/aarav-blood-panel.txt');
-    await uploadDialog.locator('input[type="checkbox"]').first().check();
+    await uploadDialog.getByRole('checkbox', { name: /I agree to send/ }).check();
     await uploadDialog.locator('button', { hasText: 'Read my record' }).click();
 
     // The job must reach a terminal state rather than spinning forever: the

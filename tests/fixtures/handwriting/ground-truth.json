@@ -1,0 +1,11 @@
+{
+  "dataset": "avi-kai/Medical_Prescription_Handwritten_Words",
+  "revision": "12f818c87b7f9727d544cbede77a03bb9b42ea61",
+  "licenseDeclaredByPublisher": "MIT",
+  "scope": "Three isolated handwritten word/digit crops. Not a clinical prescription benchmark, random sample, or representative test of difficult doctor handwriting.",
+  "samples": [
+    { "file": "Amoxicillin.png", "text": "Amoxicillin" },
+    { "file": "Metformin.png", "text": "Metformin" },
+    { "file": "5.png", "text": "5" }
+  ]
+}

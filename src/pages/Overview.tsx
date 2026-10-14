@@ -2,6 +2,7 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight, CalendarDays, Check, ChevronR
 import type { Bootstrap, HealthRecord, Language } from '../../shared/types';
 import { Badge, dateLabel, local, RecordRow } from '../components/ui';
 import HealthIllustration from '../components/HealthIllustration';
+import { hba1cTrend } from '../../shared/trends';
 
 interface Props { data: Bootstrap; language: Language; openRecord: (r: HealthRecord) => void; navigate: (page: string) => void; onUpload: () => void; }
 export default function Overview({ data, language, openRecord, navigate, onUpload }: Props) {
@@ -11,7 +12,7 @@ export default function Overview({ data, language, openRecord, navigate, onUploa
   const medicines = new Set(records.flatMap(r => r.medications.map(m => m.name))).size;
   const latestLab = records.find(r => r.type === 'lab' && r.observations.length);
   const attention = latestLab?.observations.filter(o => o.status === 'high' || o.status === 'low') || [];
-  const trend = [...records].reverse().flatMap(r => r.observations.filter(o => /hba1c|glycated/i.test(o.name) && o.value !== null).map(o => ({ value: o.value!, date: r.date })));
+  const trend = hba1cTrend(records);
   const firstName = data.patient.name.split(' ')[0];
   return <div className="page-enter overview">
     <div className="page-heading"><div><div className="eyebrow">{t('A LITTLE CLARITY, EVERY DAY', 'हर दिन, थोड़ी और स्पष्टता')}</div><h1>{t(`Good to see you, ${firstName}`, `नमस्ते, ${firstName}`)} <span className="greeting-leaf"><Leaf size={25} /></span></h1><p>{t('Your health story, all in one place. Let’s make sense of it.', 'आपकी सेहत की पूरी कहानी, एक जगह। आइए इसे समझें।')}</p></div><button className="button primary" onClick={onUpload}><Plus size={17} />{t('Add a health record', 'स्वास्थ्य रिकॉर्ड जोड़ें')}</button></div>

@@ -8,7 +8,7 @@ import { demoPatient, demoRecords } from '../shared/demo.mjs';
 import { createStore } from './store.mjs';
 import { createNimClient } from './nim.mjs';
 import { processDocument, validateFile, MAX_FILE_SIZE, DocumentError } from './pipeline.mjs';
-import { classifyObservation, explainObservation } from './domain.mjs';
+import { classifyObservation, explainObservation, requiresOcrAcknowledgment } from './domain.mjs';
 import { buildFhirBundle } from './fhir.mjs';
 import { buildFactCatalog, renderSelectedFacts } from './chat.mjs';
 
@@ -32,28 +32,38 @@ function defaultDevOrigins() {
 
 function correction(record, body) {
   if (!isObject(body)) throw new DocumentError('Provide an object containing record corrections.');
+  if ('acknowledgeOcrWarnings' in body && typeof body.acknowledgeOcrWarnings !== 'boolean') throw new DocumentError('OCR warning acknowledgment must be true or false.');
   const result = structuredClone(record);
+  let fieldsCorrected = false;
   for (const field of ['title', 'provider']) if (field in body) {
+    if (typeof body[field] !== 'string') throw new DocumentError(`${field} must be text.`);
     const value = clean(body[field]);
-    if (!value) throw new DocumentError(`${field} cannot be empty.`);
+    if (field === 'title' && !value) throw new DocumentError('title cannot be empty.');
     result[field] = value;
+    if (value !== record[field]) fieldsCorrected = true;
   }
   if ('date' in body) {
     if (body.date !== null && !validDate(body.date)) throw new DocumentError('Use a valid document date in YYYY-MM-DD format, or leave it blank.');
     result.date = body.date;
+    if (body.date !== record.date) fieldsCorrected = true;
   }
   if ('reviewStatus' in body) {
     if (!['pending', 'reviewed'].includes(body.reviewStatus)) throw new DocumentError('Invalid review status.');
     result.reviewStatus = body.reviewStatus;
   }
-  let fieldsCorrected = false;
   for (const key of ['observations', 'medications']) if (key in body) {
     if (!Array.isArray(body[key]) || body[key].length > 100) throw new DocumentError(`Invalid ${key} corrections.`);
     for (const update of body[key]) {
+      if (!isObject(update)) throw new DocumentError('Each corrected field must be an object with its existing ID.');
       const current = result[key].find(item => item.id === update?.id);
       if (!current) throw new DocumentError('A corrected field does not belong to this record.');
       const strings = key === 'observations' ? ['name', 'unit'] : ['name', 'dosage', 'frequency', 'duration', 'instructions'];
-      for (const field of strings) if (field in update) current[field] = clean(update[field], field === 'instructions' ? 350 : 120);
+      for (const field of strings) if (field in update) {
+        if (typeof update[field] !== 'string') throw new DocumentError('Medicine and observation text fields must be strings.');
+        const text = clean(update[field], field === 'instructions' ? 350 : 120);
+        if (field === 'name' && !text) throw new DocumentError('A medicine or observation name cannot be empty.');
+        current[field] = text;
+      }
       if (key === 'observations') {
         for (const field of ['value', 'referenceLow', 'referenceHigh']) if (field in update) {
           if (update[field] !== null && (typeof update[field] !== 'number' || !Number.isFinite(update[field]) || Math.abs(update[field]) > 1e12)) throw new DocumentError('Test values and reference limits must be finite numbers or blank.');
@@ -67,6 +77,8 @@ function correction(record, body) {
     }
   }
   if (fieldsCorrected) {
+    if (!('reviewStatus' in body)) result.reviewStatus = 'pending';
+    delete result.provenance.ocrWarningsAcknowledgedAt;
     const warning = 'A reviewer corrected extracted fields. Check these corrections against the original document; the original OCR text is retained.';
     result.provenance.warnings = [...new Set([...result.provenance.warnings, warning])];
     if (result.observations.length) {
@@ -77,7 +89,18 @@ function correction(record, body) {
         hi: `${count} दर्ज परिणामों की समीक्षा की गई। ${outside} परिणाम दर्ज संदर्भ सीमाओं से बाहर हैं। संशोधन मूल दस्तावेज़ से जाँचें और चिकित्सक से चर्चा करें; इन परिणामों से निदान नहीं होता।`,
       };
       result.keyPoints = result.observations.slice(0, 6).map(o => o.explanation);
+    } else if (result.medications.length) {
+      result.summary = {
+        en: `${result.medications.length} medication entries were corrected from the source prescription. Confirm unclear instructions with the prescriber; current use is not confirmed.`,
+        hi: `मूल प्रिस्क्रिप्शन की ${result.medications.length} दवाओं के विवरण में सुधार किया गया है। अस्पष्ट निर्देश चिकित्सक से स्पष्ट करें; वर्तमान उपयोग की पुष्टि नहीं है।`,
+      };
+      result.keyPoints = [];
     }
+  }
+  if (result.reviewStatus === 'pending') delete result.provenance.ocrWarningsAcknowledgedAt;
+  if (result.reviewStatus === 'reviewed' && requiresOcrAcknowledgment(result)) {
+    if (body.acknowledgeOcrWarnings !== true) throw new DocumentError('Acknowledge the unresolved OCR warnings after checking the original document before marking this record reviewed.');
+    result.provenance.ocrWarningsAcknowledgedAt = new Date().toISOString();
   }
   return result;
 }
@@ -153,6 +176,7 @@ export function createApp({ databasePath = resolve(process.env.DATA_DIR || resol
   });
   app.post('/api/records', upload.single('file'), (req, res) => {
     if (req.body?.consent !== 'true') throw new DocumentError('Consent is required before processing a medical document with NVIDIA AI.');
+    if (req.body?.handwriting !== undefined && !['true', 'false'].includes(req.body.handwriting)) throw new DocumentError('The handwriting option must be true or false.');
     validateFile(req.file);
     if (runningJobs >= 2) return res.status(429).json({ error: 'Two documents are already processing. Wait for one to finish before uploading another.' });
     if (store.listRecords().length >= 250) return res.status(409).json({ error: 'The local prototype supports 250 records. Delete an unneeded record before uploading.' });
@@ -164,7 +188,7 @@ export function createApp({ databasePath = resolve(process.env.DATA_DIR || resol
       const update = changes => { job = store.saveJob({ ...job, ...changes }); };
       try {
         update({ status: 'processing', stage: 'Reading document' });
-        const record = await processDocument(file, nim, stage => update({ stage }));
+        const record = await processDocument(file, nim, stage => update({ stage }), { handwriting: req.body?.handwriting === 'true' });
         store.saveRecord(record);
         update({ status: 'completed', stage: 'Saved to timeline', recordId: record.id });
       } catch (error) {

@@ -1,4 +1,6 @@
 /** The model selects relevance; only these validated bilingual facts reach the answer. */
+import { supportedDiagnosis } from './domain.mjs';
+
 export function buildFactCatalog(records, language) {
   const facts = [];
   const add = (record, kind, text) => facts.push({ id: `F${facts.length + 1}`, recordId: record.id, title: record.title, date: record.date, kind, text });
@@ -11,7 +13,7 @@ export function buildFactCatalog(records, language) {
         ? `प्रिस्क्रिप्शन में दर्ज विवरण: ${details}। यह वर्तमान उपयोग की पुष्टि नहीं करता। अस्पष्ट निर्देश डॉक्टर या फार्मासिस्ट से स्पष्ट करें।`
         : `The prescription records: ${details}. This does not confirm current use. Clarify unclear instructions with the prescriber or pharmacist.`);
     }
-    for (const diagnosis of record.diagnoses) add(record, 'diagnosis', language === 'hi'
+    for (const diagnosis of record.diagnoses.filter(item => supportedDiagnosis(record.sourceText,item.sourceText,item.name))) add(record, 'diagnosis', language === 'hi'
       ? `इस दस्तावेज़ में “${diagnosis.name}” दर्ज है। यह मूल रिकॉर्ड की जानकारी है, नया निदान नहीं।`
       : `This document records “${diagnosis.name}”. This is a transcription of the record, not a new diagnosis.`);
     if (facts.length > 100) break;
@@ -29,7 +31,8 @@ export function renderSelectedFacts(reply, catalog, language) {
   }
   const selected = [...new Set(reply.factIds)].map(id => catalog.find(fact => fact.id === id));
   const intro = language === 'hi' ? 'आपके रिकॉर्ड से संबंधित जानकारी:\n\n' : 'Relevant information from your records:\n\n';
-  const answer = intro + selected.map(fact => `${fact.date || (language === 'hi' ? 'तारीख दर्ज नहीं' : 'Date not recorded')} · ${fact.text}`).join('\n\n');
+  const statements = selected.map(fact => `${fact.date || (language === 'hi' ? 'तारीख दर्ज नहीं' : 'Date not recorded')} · ${fact.text}`);
+  const answer = intro + [...new Set(statements)].join('\n\n');
   const cited = [...new Set(selected.map(fact => fact.recordId))];
   return { answer, citations: cited.map(recordId => ({ recordId, title: selected.find(fact => fact.recordId === recordId).title })) };
 }
